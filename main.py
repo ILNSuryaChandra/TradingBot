@@ -23,7 +23,7 @@ async def main():
             logger.info(f"Config loaded with sections: {list(config.keys())}")
         
         # Initialize setup with both path and loaded config
-        setup = TradingBotSetup(str(config_path), config)
+        setup = TradingBotSetup(str(config_path))
         
         # Create directory structure
         setup.setup_directory_structure()
@@ -57,7 +57,7 @@ async def main():
         await trader.start()
         
     except Exception as e:
-        logger.error(f"Error in main: {str(e)}")
+        logger.error(f"Error in main: {repr(e)}")
         raise
 
 if __name__ == "__main__":
@@ -66,4 +66,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
-        logger.error(f"Bot stopped due to error: {str(e)}")
+        logger.error(f"Bot stopped due to error: {repr(e)}")
