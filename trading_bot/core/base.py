@@ -71,29 +71,25 @@ class AsyncBybitClient:
         self.config = config
         self.client = HTTP(
             testnet=config['api']['testnet'],
-            api_key=config.get('api_key'),
-            api_secret=config.get('api_secret')
+            api_key=config['api']['api_key'],
+            api_secret=config['api']['api_secret']
         )
         self.rate_limit_margin = config['api']['rate_limit_margin']
         self.logger = logging.getLogger(__name__)
-        self.symbols = config['trading']['symbols']
         
     async def get_balance(self, coin: str = "USDT") -> float:
         try:
             response = await self._make_request(
                 lambda: self.client.get_wallet_balance(accountType="UNIFIED", coin=coin)
             )
-            return float(response['result']['list'][0]['totalWalletBalance'])
+            if response.get('retCode') == 0:
+                return float(response['result']['list'][0]['totalWalletBalance'])
+            raise Exception(f"Failed to get balance: {response.get('retMsg')}")
         except Exception as e:
             self.logger.error(f"Error fetching balance: {str(e)}")
             raise
-            
-    async def get_market_data(
-        self,
-        symbol: str,
-        interval: str,
-        limit: int = 1000
-    ) -> pd.DataFrame:
+
+    async def get_market_data(self, symbol: str, interval: str, limit: int = 1000) -> pd.DataFrame:
         try:
             response = await self._make_request(
                 lambda: self.client.get_kline(
@@ -103,67 +99,107 @@ class AsyncBybitClient:
                 )
             )
             
-            df = pd.DataFrame(response['result']['list'])
-            df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover']
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            
-            # Convert string values to float
-            for col in ['open', 'high', 'low', 'close', 'volume', 'turnover']:
-                df[col] = df[col].astype(float)
-                
-            return df.sort_values('timestamp')
-            
+            if response.get('retCode') == 0:
+                df = pd.DataFrame(response['result']['list'])
+                if not df.empty:
+                    df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover']
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    
+                    # Convert string values to float
+                    for col in ['open', 'high', 'low', 'close', 'volume', 'turnover']:
+                        df[col] = df[col].astype(float)
+                    
+                    return df.sort_values('timestamp')
+                return pd.DataFrame()
+            raise Exception(f"Failed to get market data: {response.get('retMsg')}")
         except Exception as e:
             self.logger.error(f"Error fetching market data: {str(e)}")
             raise
-            
-    async def place_order(self, order: OrderData) -> Dict[str, Any]:
+
+    async def place_order(self, order: 'OrderData') -> Dict[str, Any]:
         try:
             response = await self._make_request(
                 lambda: self.client.place_order(
+                    category="linear",
                     symbol=order.symbol,
                     side=order.side,
-                    order_type=order.order_type,
-                    qty=order.qty,
-                    price=order.price,
-                    stop_loss=order.stop_loss,
-                    take_profit=order.take_profit,
-                    time_in_force=order.time_in_force,
-                    reduce_only=order.reduce_only,
-                    close_on_trigger=order.close_on_trigger
+                    orderType=order.order_type,
+                    qty=str(order.qty),
+                    price=str(order.price) if order.price else None,
+                    stopLoss=str(order.stop_loss) if order.stop_loss else None,
+                    takeProfit=str(order.take_profit) if order.take_profit else None,
+                    timeInForce=order.time_in_force,
+                    reduceOnly=order.reduce_only,
+                    closeOnTrigger=order.close_on_trigger
                 )
             )
-            return response['result']
+            
+            if response.get('retCode') == 0:
+                return response['result']
+            raise Exception(f"Failed to place order: {response.get('retMsg')}")
         except Exception as e:
             self.logger.error(f"Error placing order: {str(e)}")
             raise
-            
+
     async def get_positions(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         try:
             response = await self._make_request(
                 lambda: self.client.get_positions(
-                    symbol=symbol,
-                    settleCoin="USDT"
+                    category="linear",
+                    symbol=symbol
                 )
             )
-            return response['result']['list']
+            
+            if response.get('retCode') == 0:
+                return response['result']['list']
+            raise Exception(f"Failed to get positions: {response.get('retMsg')}")
         except Exception as e:
             self.logger.error(f"Error fetching positions: {str(e)}")
             raise
-            
+
     async def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
         try:
             response = await self._make_request(
                 lambda: self.client.cancel_order(
+                    category="linear",
                     symbol=symbol,
-                    order_id=order_id
+                    orderId=order_id
                 )
             )
-            return response['result']
+            
+            if response.get('retCode') == 0:
+                return response['result']
+            raise Exception(f"Failed to cancel order: {response.get('retMsg')}")
         except Exception as e:
             self.logger.error(f"Error cancelling order: {str(e)}")
             raise
+
+    async def close_position(self, symbol: str, side: str) -> Dict[str, Any]:
+        try:
+            # Get position size first
+            positions = await self.get_positions(symbol)
+            position = next((p for p in positions if p['symbol'] == symbol), None)
             
+            if position:
+                response = await self._make_request(
+                    lambda: self.client.place_order(
+                        category="linear",
+                        symbol=symbol,
+                        side="Sell" if side == "Buy" else "Buy",
+                        orderType="Market",
+                        qty=position['size'],
+                        reduceOnly=True
+                    )
+                )
+                
+                if response.get('retCode') == 0:
+                    return response['result']
+                raise Exception(f"Failed to close position: {response.get('retMsg')}")
+            return {"message": "No position to close"}
+        except Exception as e:
+            self.logger.error(f"Error closing position: {str(e)}")
+            raise
+
     async def _make_request(self, request_func, max_retries: int = 3):
         for attempt in range(max_retries):
             try:
@@ -173,22 +209,6 @@ class AsyncBybitClient:
                 if attempt == max_retries - 1:
                     raise
                 await asyncio.sleep(1 * (attempt + 1))
-                
-    async def close_position(self, symbol: str, side: str) -> Dict[str, Any]:
-        try:
-            response = await self._make_request(
-                lambda: self.client.place_order(
-                    symbol=symbol,
-                    side="Sell" if side == "Buy" else "Buy",
-                    order_type="Market",
-                    qty=None,  # Will be filled by available position size
-                    reduce_only=True
-                )
-            )
-            return response['result']
-        except Exception as e:
-            self.logger.error(f"Error closing position: {str(e)}")
-            raise
 
 class ConfigManager:
     def __init__(self, config_path: str):
