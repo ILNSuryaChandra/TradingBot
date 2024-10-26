@@ -7,9 +7,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import xgboost as xgb
 import tensorflow as tf
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.optimizers import Adam
+from keras.models import Sequential, load_model
+from keras.layers import LSTM, Dense, Dropout
+from keras.optimizers import Adam
 import joblib
 import logging
 from datetime import datetime
@@ -67,7 +67,8 @@ class ModelEnsemble:
         self.logger = logging.getLogger(__name__)
         self.models = {}
         self.scalers = {}
-        self.feature_engineering = FeatureEngineering(config)
+        self.sequence_length = 10
+        self.feature_dims = None
         self._initialize_models()
         
     def _initialize_models(self):
@@ -84,64 +85,84 @@ class ModelEnsemble:
                 random_state=42
             )
             
-            # Initialize LSTM model
-            self.models['lstm'] = Sequential([
-                LSTM(units=50, return_sequences=True, 
-                     input_shape=(None, self._get_feature_count())),
-                Dropout(0.2),
-                LSTM(units=30, return_sequences=False),
-                Dropout(0.2),
-                Dense(units=1)
-            ])
+            # LSTM will be initialized during first training when we know input dimensions
+            self.models['lstm'] = None
             
-            self.models['lstm'].compile(
-                optimizer=Adam(learning_rate=0.001),
-                loss='mse',
-                metrics=['mae']
-            )
+            self.logger.info("Models initialized successfully")
             
         except Exception as e:
             self.logger.error(f"Error initializing models: {str(e)}")
             raise
             
-    def _get_feature_count(self) -> int:
-        # This will be updated during training
-        return 50
-        
+    def _initialize_lstm(self, input_shape: Tuple[int, int]):
+        """Initialize LSTM model with proper input shape"""
+        try:
+            model = Sequential([
+                LSTM(50, return_sequences=True, input_shape=input_shape),
+                Dropout(0.2),
+                LSTM(30, return_sequences=False),
+                Dropout(0.2),
+                Dense(1)
+            ])
+            
+            model.compile(
+                optimizer=Adam(learning_rate=0.001),
+                loss='mse',
+                metrics=['mae']
+            )
+            
+            return model
+            
+        except Exception as e:
+            self.logger.error(f"Error initializing LSTM model: {str(e)}")
+            raise
+            
     def prepare_data(
         self,
         df: pd.DataFrame,
-        sequence_length: int = 10,
-        target_column: str = 'close'
+        sequence_length: Optional[int] = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         try:
-            # Engineer features
-            data = self.feature_engineering.create_features(df)
+            if sequence_length:
+                self.sequence_length = sequence_length
+                
+            # Create features
+            data = df.copy()
             
-            # Separate features and target
-            features = data.drop(columns=[target_column, 'timestamp', 'open', 'high', 'low'])
-            target = data[target_column].pct_change().shift(-1)  # Next period returns
+            # Add technical indicators
+            data.ta.strategy("AllStrategy")
             
-            # Remove NaN values
-            features = features.dropna()
-            target = target.dropna()
+            # Remove non-numeric columns and NaN values
+            features = data.select_dtypes(include=[np.number]).fillna(0)
+            
+            # Remove target column if exists
+            if 'close' in features.columns:
+                target = features['close'].pct_change().shift(-1)  # Next period returns
+                features = features.drop(columns=['close'])
+            else:
+                target = pd.Series(np.zeros(len(features)))
             
             # Scale features
-            scaler = StandardScaler()
-            scaled_features = scaler.fit_transform(features)
-            self.scalers['features'] = scaler
+            if 'features' not in self.scalers:
+                self.scalers['features'] = StandardScaler()
+                scaled_features = self.scalers['features'].fit_transform(features)
+            else:
+                scaled_features = self.scalers['features'].transform(features)
             
             # Create sequences for LSTM
             X_lstm, y = [], []
-            for i in range(len(scaled_features) - sequence_length):
-                X_lstm.append(scaled_features[i:(i + sequence_length)])
-                y.append(target.iloc[i + sequence_length])
-                
+            for i in range(len(scaled_features) - self.sequence_length):
+                X_lstm.append(scaled_features[i:i + self.sequence_length])
+                y.append(target.iloc[i + self.sequence_length])
+            
             X_lstm = np.array(X_lstm)
+            X_xgb = scaled_features[self.sequence_length:]
             y = np.array(y)
             
-            # Use the last sequence_length points for XGBoost
-            X_xgb = scaled_features[sequence_length:]
+            # Initialize LSTM if not done yet
+            if self.models['lstm'] is None:
+                self.feature_dims = X_lstm.shape[2]
+                self.models['lstm'] = self._initialize_lstm((self.sequence_length, self.feature_dims))
             
             return X_lstm, X_xgb, y
             
@@ -152,17 +173,21 @@ class ModelEnsemble:
     def train(
         self,
         df: pd.DataFrame,
-        sequence_length: int = 10,
         validation_split: float = 0.2
     ):
         try:
             # Prepare data
-            X_lstm, X_xgb, y = self.prepare_data(df, sequence_length)
+            X_lstm, X_xgb, y = self.prepare_data(df)
             
             # Split data
-            X_lstm_train, X_lstm_val, X_xgb_train, X_xgb_val, y_train, y_val = (
-                train_test_split(X_lstm, X_xgb, y, test_size=validation_split, shuffle=False)
-            )
+            split_idx = int(len(X_lstm) * (1 - validation_split))
+            
+            X_lstm_train = X_lstm[:split_idx]
+            X_lstm_val = X_lstm[split_idx:]
+            X_xgb_train = X_xgb[:split_idx]
+            X_xgb_val = X_xgb[split_idx:]
+            y_train = y[:split_idx]
+            y_val = y[split_idx:]
             
             # Train XGBoost
             self.models['xgboost'].fit(
@@ -190,29 +215,27 @@ class ModelEnsemble:
                 ]
             )
             
+            self.logger.info("Models trained successfully")
+            
         except Exception as e:
             self.logger.error(f"Error training models: {str(e)}")
             raise
             
-    def predict(
-        self,
-        df: pd.DataFrame,
-        sequence_length: int = 10
-    ) -> Dict[str, float]:
+    def predict(self, df: pd.DataFrame) -> Dict[str, float]:
         try:
             # Prepare prediction data
-            X_lstm, X_xgb, _ = self.prepare_data(df.tail(sequence_length + 1))
+            X_lstm, X_xgb, _ = self.prepare_data(df)
             
-            # Get predictions
+            # Get predictions from both models
             xgb_pred = self.models['xgboost'].predict(X_xgb[-1:])
             lstm_pred = self.models['lstm'].predict(X_lstm[-1:])
             
             # Ensemble prediction (weighted average)
-            ensemble_pred = (0.6 * xgb_pred[0] + 0.4 * lstm_pred[0][0])
+            ensemble_pred = 0.6 * xgb_pred[-1] + 0.4 * lstm_pred[-1][0]
             
             return {
-                'xgboost': float(xgb_pred[0]),
-                'lstm': float(lstm_pred[0][0]),
+                'xgboost': float(xgb_pred[-1]),
+                'lstm': float(lstm_pred[-1][0]),
                 'ensemble': float(ensemble_pred)
             }
             
@@ -229,10 +252,13 @@ class ModelEnsemble:
             joblib.dump(self.models['xgboost'], path / 'xgboost_model.joblib')
             
             # Save LSTM
-            self.models['lstm'].save(path / 'lstm_model.h5')
+            if self.models['lstm'] is not None:
+                self.models['lstm'].save(str(path / 'lstm_model.h5'))
             
             # Save scalers
             joblib.dump(self.scalers, path / 'scalers.joblib')
+            
+            self.logger.info(f"Models saved to {directory}")
             
         except Exception as e:
             self.logger.error(f"Error saving models: {str(e)}")
@@ -243,13 +269,18 @@ class ModelEnsemble:
             path = Path(directory)
             
             # Load XGBoost
-            self.models['xgboost'] = joblib.load(path / 'xgboost_model.joblib')
+            if (path / 'xgboost_model.joblib').exists():
+                self.models['xgboost'] = joblib.load(path / 'xgboost_model.joblib')
             
             # Load LSTM
-            self.models['lstm'] = load_model(path / 'lstm_model.h5')
+            if (path / 'lstm_model.h5').exists():
+                self.models['lstm'] = load_model(str(path / 'lstm_model.h5'))
             
             # Load scalers
-            self.scalers = joblib.load(path / 'scalers.joblib')
+            if (path / 'scalers.joblib').exists():
+                self.scalers = joblib.load(path / 'scalers.joblib')
+            
+            self.logger.info(f"Models loaded from {directory}")
             
         except Exception as e:
             self.logger.error(f"Error loading models: {str(e)}")
