@@ -92,6 +92,7 @@ class AutonomousTrader:
         return logger
         
     async def start(self):
+        """Start the trading bot"""
         try:
             self.logger.info("Starting autonomous trader...")
             self.is_running = True
@@ -100,14 +101,17 @@ class AutonomousTrader:
             await self._initialize_market_data()
             await self._load_models()
             
-            # Start trading loops
-            await asyncio.gather(
+            # Create and start all trading loops
+            loops = [
                 self._main_trading_loop(),
                 self._market_data_update_loop(),
                 self._position_management_loop(),
                 self._model_update_loop(),
-                self._state_saving_loop()  # New loop for periodic state saving
-            )
+                self._state_saving_loop()
+            ]
+            
+            # Run all loops concurrently
+            await asyncio.gather(*loops)
             
         except Exception as e:
             self.logger.error(f"Error starting trader: {str(e)}")
@@ -135,75 +139,135 @@ class AutonomousTrader:
             raise
             
     async def _initialize_market_data(self):
+        """Initialize market data for all configured symbols and timeframes"""
         try:
+            self.logger.info("Initializing market data...")
+            self.market_data = {}
+            
             for symbol in self.config['trading']['symbols']:
-                # Initialize market data for each timeframe
                 self.market_data[symbol] = {}
                 for timeframe in (
                     self.config['trading']['timeframes']['lower'] +
                     self.config['trading']['timeframes']['medium'] +
                     self.config['trading']['timeframes']['higher']
                 ):
-                    data = await self.client.get_market_data(
-                        symbol=symbol,
-                        interval=timeframe,
-                        limit=1000
-                    )
-                    self.market_data[symbol][timeframe] = data
-                    
-            self.logger.info("Market data initialized successfully")
+                    try:
+                        data = await self.client.get_market_data(
+                            symbol=symbol,
+                            interval=timeframe,
+                            limit=1000
+                        )
+                        if not data.empty:
+                            # Add technical indicators
+                            data.ta.strategy(name="AllStrategy")
+                            self.market_data[symbol][timeframe] = data
+                            self.logger.info(f"Initialized market data for {symbol} {timeframe}")
+                        else:
+                            self.logger.warning(f"No data received for {symbol} {timeframe}")
+                    except Exception as e:
+                        self.logger.error(f"Error fetching data for {symbol} {timeframe}: {str(e)}")
+                        # Continue with other timeframes even if one fails
+                        continue
+                        
+                    # Small delay between requests to avoid rate limiting
+                    await asyncio.sleep(0.5)
+                
+            if not self.market_data:
+                raise Exception("Failed to initialize market data for any symbol")
+                
+            self.logger.info("Market data initialization completed")
             
         except Exception as e:
             self.logger.error(f"Error initializing market data: {str(e)}")
             raise
-            
+
     async def _load_models(self):
+        """Load or train trading models"""
         try:
-            model_path = Path(self.config['models']['save_path'])
+            self.logger.info("Loading models...")
+            model_path = Path(self.config['models'].get('save_path', 'models'))
+            
             if model_path.exists():
-                self.model_ensemble.load_models(str(model_path))
-                self.logger.info("Models loaded successfully")
-            else:
-                self.logger.info("No existing models found. Will train new models.")
-                await self._train_models()
-                
+                # Try to load existing models
+                try:
+                    self.model_ensemble.load_models(str(model_path))
+                    self.logger.info("Models loaded successfully")
+                    return
+                except Exception as e:
+                    self.logger.warning(f"Could not load existing models: {str(e)}")
+            
+            # Train new models if loading fails or no models exist
+            self.logger.info("Training new models...")
+            await self._train_models()
+            
         except Exception as e:
             self.logger.error(f"Error loading models: {str(e)}")
             raise
-            
+
     async def _train_models(self):
+        """Train new models with available market data"""
         try:
             # Prepare training data
             training_data = {}
             for symbol in self.config['trading']['symbols']:
-                training_data[symbol] = self._prepare_training_data(symbol)
+                if symbol in self.market_data:
+                    training_data[symbol] = self._prepare_training_data(symbol)
+            
+            if not training_data:
+                raise Exception("No training data available")
                 
-            # Train models
+            # Train models for each symbol
             for symbol, data in training_data.items():
+                self.logger.info(f"Training models for {symbol}")
                 self.model_ensemble.train(data)
                 
-            # Save models
-            model_path = Path(self.config['models']['save_path'])
+            # Save trained models
+            model_path = Path(self.config['models'].get('save_path', 'models'))
             model_path.mkdir(parents=True, exist_ok=True)
             self.model_ensemble.save_models(str(model_path))
             
-            self.logger.info("Models trained and saved successfully")
+            self.logger.info("Model training completed successfully")
             
         except Exception as e:
             self.logger.error(f"Error training models: {str(e)}")
             raise
-            
+
     def _prepare_training_data(self, symbol: str) -> pd.DataFrame:
-        # Combine data from different timeframes
-        data = pd.DataFrame()
-        for timeframe in self.market_data[symbol]:
-            df = self.market_data[symbol][timeframe].copy()
-            # Add timeframe-specific indicators
-            df.ta.strategy("AllStrategy")
-            # Add suffix to avoid column name conflicts
-            df = df.add_suffix(f'_{timeframe}')
-            data = pd.concat([data, df], axis=1)
-        return data
+        """Prepare training data by combining different timeframes"""
+        try:
+            # Start with the lowest timeframe data
+            base_tf = self.config['trading']['timeframes']['lower'][0]
+            if base_tf not in self.market_data[symbol]:
+                raise Exception(f"Base timeframe {base_tf} data not available")
+                
+            data = self.market_data[symbol][base_tf].copy()
+            
+            # Add features from other timeframes
+            for timeframe in (
+                self.config['trading']['timeframes']['lower'][1:] +
+                self.config['trading']['timeframes']['medium'] +
+                self.config['trading']['timeframes']['higher']
+            ):
+                if timeframe in self.market_data[symbol]:
+                    tf_data = self.market_data[symbol][timeframe].copy()
+                    
+                    # Add timeframe-specific suffix to avoid column name conflicts
+                    tf_data = tf_data.add_suffix(f'_{timeframe}')
+                    
+                    # Merge on timestamp
+                    data = pd.merge_asof(
+                        data,
+                        tf_data,
+                        left_index=True,
+                        right_index=True,
+                        direction='backward'
+                    )
+            
+            return data.dropna()  # Remove any rows with missing data
+            
+        except Exception as e:
+            self.logger.error(f"Error preparing training data for {symbol}: {str(e)}")
+            raise
         
     async def _main_trading_loop(self):
         while self.is_running:
