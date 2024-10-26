@@ -1,0 +1,164 @@
+api:
+  testnet: true
+  base_url: "https://api-testnet.bybit.com"
+  rate_limit_margin: 0.95
+  api_key: "YOUR_API_KEY_HERE"
+  api_secret: "YOUR_API_SECRET_HERE"
+
+trading:
+  interval_seconds: 60
+  symbols: 
+    - "BTCUSDT"
+    - "ETHUSDT"
+    - "SOLUSDT"
+    - "POPCATUSDT"
+    - "SUIUSDT"
+    - "WIFUSDT"
+  timeframes: 
+      lower: ["1","5","15"]
+      medium: ["60","240","360"]
+      higher: ["720","D","W"]
+  
+  state_management:
+      state_path: "state"
+      backup_interval_minutes: 10
+      max_backups: 24  # Keep last 24 backups
+  position_management:
+    max_positions_per_symbol: 3
+    total_max_positions: 10
+    base_risk_per_trade: 0.01
+    max_account_risk: 0.05
+  adaptive_parameters:
+    enabled: true
+    adaptation_frequency: "1h"
+    position_sizing:
+      base_risk: 0.01
+      min_risk: 0.005
+      max_risk: 0.02
+      adjustment_factors:
+        win_rate: 0.3
+        profit_factor: 0.3
+        market_volatility: 0.2
+        model_confidence: 0.2
+    profit_targets:
+      mode: "dynamic"
+      base_tp_ratio: 2.0
+      min_tp_ratio: 1.2
+      max_tp_ratio: 5.0
+      adaptive_factors:
+        volatility_weight: 0.3
+        trend_strength_weight: 0.3
+        historical_moves_weight: 0.2
+        support_resistance_weight: 0.2
+    stop_loss:
+      mode: "dynamic"
+      base_sl_multiplier: 1.5
+      min_sl_multiplier: 1.0
+      max_sl_multiplier: 3.0
+      adaptive_factors:
+        atr_weight: 0.4
+        volatility_weight: 0.3
+        support_resistance_weight: 0.3
+  sl_multiplier: 2.0  # Stop loss ATR multiplier
+  tp_multiplier: 3.0  # Take profit ATR multiplier
+
+models:
+  training:
+    historical_data:
+      lookback_years: 10
+      min_required_years: 5
+      data_resolution: "1"
+    adaptive_features:
+      enabled: true
+      feature_selection:
+        mode: "dynamic"
+        evaluation_interval: "1d"
+        minimum_importance: 0.02
+      market_regime:
+        detection_enabled: true
+        regimes:
+          - "trending"
+          - "ranging"
+          - "volatile"
+          - "stable"
+        regime_specific_models: true
+    performance_optimization:
+      enabled: true
+      optimization_metric: "sharpe_ratio"
+      optimization_interval: "12h"
+      parameter_bounds:
+        min_holding_time: "5"
+        max_holding_time: "D"
+        min_profit_target: 0.005
+        max_profit_target: 0.5
+
+strategy:
+  adaptive_execution:
+    enabled: true
+    entry_optimization:
+      mode: "self_adjusting"
+      factors:
+        - name: "market_volatility"
+          weight: 0.3
+        - name: "spread_analysis"
+          weight: 0.2
+        - name: "volume_profile"
+          weight: 0.3
+        - name: "order_flow"
+          weight: 0.2
+    position_management:
+      adaptive_scaling:
+        enabled: true
+        scale_factors:
+          - name: "trend_strength"
+            weight: 0.3
+          - name: "volatility"
+            weight: 0.3
+          - name: "momentum"
+            weight: 0.2
+          - name: "market_regime"
+            weight: 0.2
+    exit_optimization:
+      mode: "dynamic"
+      factors:
+        - name: "profit_target"
+          type: "adaptive"
+          base_value: 0.02
+          adjustment_range: [0.01, 0.05]
+        - name: "trailing_stop"
+          type: "adaptive"
+          base_value: 0.01
+          adjustment_range: [0.005, 0.03]
+
+monitoring:
+  performance_tracking:
+    enabled: true
+    update_interval: 60
+    adaptive_thresholds:
+      enabled: true
+      base_thresholds:
+        drawdown: 0.1
+        losing_streak: 5
+      adjustment_factors:
+        market_volatility: 0.3
+        win_rate: 0.3
+        profit_factor: 0.2
+        risk_exposure: 0.2
+
+risk_management:
+  adaptive_limits:
+    enabled: true
+    update_frequency: "1h"
+    position_limits:
+      base_max_positions: 10
+      adjustment_factors:
+        market_volatility: 0.3
+        portfolio_performance: 0.3
+        correlation: 0.2
+        liquidity: 0.2
+    leverage_limits:
+      base_leverage: 2
+      adjustment_factors:
+        volatility: 0.4
+        trend_strength: 0.3
+        market_regime: 0.3
