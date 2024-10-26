@@ -1,0 +1,64 @@
+name: Code Sync and Version
+
+on:
+  push:
+    branches: [ main, development ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+  schedule:
+    - cron: '*/30 * * * *'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install bump2version
+    
+    - name: Check for changes
+      id: check_changes
+      run: |
+        git fetch
+        CHANGES=$(git diff origin/main HEAD)
+        echo "changes=$CHANGES" >> $GITHUB_OUTPUT
+    
+    - name: Update version
+      if: steps.check_changes.outputs.changes != ''
+      run: |
+        bump2version patch --allow-dirty
+    
+    - name: Commit and push if changed
+      if: steps.check_changes.outputs.changes != ''
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add .
+        git commit -m "Auto-sync and version bump [skip ci]"
+        git push
+    
+    - name: Create Release
+      if: github.ref == 'refs/heads/main' && steps.check_changes.outputs.changes != ''
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ steps.version.outputs.version }}
+        release_name: Release v${{ steps.version.outputs.version }}
+        body: |
+          Automatic release from sync workflow
+        draft: false
+        prerelease: false
