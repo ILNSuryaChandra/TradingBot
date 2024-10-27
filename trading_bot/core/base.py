@@ -78,6 +78,10 @@ class AsyncBybitClient:
         self.api_secret = config['api']['api_secret']
         self.base_url = config['api']['base_url']
         self.rate_limit_margin = config['api']['rate_limit_margin']
+        self.session_auth = {
+            "api_key": self.api_key,
+            "api_secret": self.api_secret
+        }
         
         try:
             self.logger.info(f"Initializing Bybit client with testnet={config['api']['testnet']}")
@@ -115,39 +119,22 @@ class AsyncBybitClient:
         ).hexdigest()
         
     async def get_balance(self, coin: str = "USDT") -> float:
-        """Get wallet balance using V3 API"""
+        """Get wallet balance"""
         try:
-            await asyncio.sleep(self.rate_limit_margin)
+            response = await self._make_request(
+                lambda: self.client.get_wallet_balance(
+                    accountType="UNIFIED",
+                    coin=coin
+                )
+            )
             
-            self.logger.info(f"Requesting wallet balance for {coin}")
-            
-            # Generate timestamp and signature
-            timestamp = str(int(datetime.now().timestamp() * 1000))
-            signature = self._get_signature(timestamp)
-            
-            # Set up headers
-            headers = {
-                "X-BAPI-API-KEY": self.api_key,
-                "X-BAPI-TIMESTAMP": timestamp,
-                "X-BAPI-SIGN": signature,
-                "X-BAPI-RECV-WINDOW": "5000"
-            }
-            
-            # Make API request
-            url = f"{self.base_url}/v3/private/wallet/balance"
-            response = requests.get(url, headers=headers)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data['ret_code'] == 0:
-                    balance_info = data['result'].get(coin, {})
-                    total_balance = float(balance_info.get('wallet_balance', '0'))
-                    self.logger.info(f"Successfully retrieved balance: {total_balance} {coin}")
-                    return total_balance
-                else:
-                    self.logger.error(f"API error: {data.get('ret_msg')}")
-            
-            self.logger.error(f"Failed to get balance: Status {response.status_code}")
+            if isinstance(response, dict) and response.get('retCode') == 0:
+                balance_info = response.get('result', {}).get(coin, {})
+                total_balance = float(balance_info.get('walletBalance', '0'))
+                self.logger.info(f"Successfully retrieved balance: {total_balance} {coin}")
+                return total_balance
+                
+            self.logger.error(f"Failed to get balance: {response}")
             return 0.0
             
         except Exception as e:
@@ -252,29 +239,18 @@ class AsyncBybitClient:
             }
             if symbol:
                 params["symbol"] = symbol
-                
-            # Add timestamp and signature
-            timestamp = str(int(datetime.now().timestamp() * 1000))
-            signature = self._get_signature(timestamp, params)
-            
-            headers = {
-                **self.headers,
-                "X-BAPI-TIMESTAMP": timestamp,
-                "X-BAPI-SIGN": signature
-            }
-            
+
             response = await self._make_request(
-                lambda: self.client.get_positions(**params),
-                headers=headers
+                lambda: self.client.get_positions(**params)
             )
             
-            if response.get('retCode') == 0:
-                return response['result']['list']
-            raise Exception(f"Failed to get positions: {response.get('retMsg')}")
+            if isinstance(response, dict) and response.get('retCode') == 0:
+                return response.get('result', {}).get('list', [])
+            return []
             
         except Exception as e:
             self.logger.error(f"Error fetching positions: {str(e)}")
-            raise
+            return []
 
     async def get_active_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get all active orders"""
@@ -391,15 +367,16 @@ class AsyncBybitClient:
                 response = request_func()
                 
                 if isinstance(response, dict):
-                    ret_code = response.get('ret_code')
-                    if ret_code == 0:
+                    if response.get('retCode') == 0:
                         return response
+                    elif response.get('retCode') == 10003:  # Session expired
+                        self.logger.warning("Session expired, refreshing authentication...")
+                        await self._refresh_auth()
+                        continue
                         
-                    error_msg = response.get('ret_msg', 'Unknown error')
-                    if ret_code in [10003, 10004]:  # API key errors
-                        self.logger.error(f"API key error: {error_msg}")
-                        raise Exception(f"API key error: {error_msg}")
-                        
+                    error_msg = response.get('retMsg', 'Unknown error')
+                    self.logger.error(f"API error: {error_msg}")
+                    
                 return response
                 
             except Exception as e:
