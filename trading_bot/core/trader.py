@@ -154,32 +154,42 @@ class AutonomousTrader:
             
             for symbol in self.config['trading']['symbols']:
                 self.market_data[symbol] = {}
-                for timeframe in (
+                
+                timeframes = (
                     self.config['trading']['timeframes']['lower'] +
                     self.config['trading']['timeframes']['medium'] +
                     self.config['trading']['timeframes']['higher']
-                ):
+                )
+                
+                for timeframe in timeframes:
                     try:
+                        # Get raw market data
                         data = await self.client.get_market_data(
                             symbol=symbol,
                             interval=timeframe,
                             limit=1000
                         )
+                        
                         if not data.empty:
-                            # Add technical indicators
-                            data.ta.strategy(name="AllStrategy")
+                            # Add basic indicators
+                            data.ta.rsi(length=14, append=True)
+                            data.ta.macd(fast=12, slow=26, signal=9, append=True)
+                            data.ta.bbands(length=20, std=2, append=True)
+                            data.ta.atr(length=14, append=True)
+                            
+                            # Store processed data
                             self.market_data[symbol][timeframe] = data
                             self.logger.info(f"Initialized market data for {symbol} {timeframe}")
                         else:
                             self.logger.warning(f"No data received for {symbol} {timeframe}")
+                            
                     except Exception as e:
                         self.logger.error(f"Error fetching data for {symbol} {timeframe}: {str(e)}")
-                        # Continue with other timeframes even if one fails
                         continue
-                        
-                    # Small delay between requests to avoid rate limiting
+                    
+                    # Rate limiting
                     await asyncio.sleep(0.5)
-                
+            
             if not self.market_data:
                 raise Exception("Failed to initialize market data for any symbol")
                 

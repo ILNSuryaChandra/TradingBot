@@ -82,12 +82,19 @@ class AsyncBybitClient:
         try:
             self.logger.info(f"Initializing Bybit client with testnet={config['api']['testnet']}")
             
-            # Initialize HTTP client
+            # Initialize HTTP client with proper authentication
             self.client = HTTP(
                 testnet=config['api']['testnet'],
                 api_key=self.api_key,
-                api_secret=self.api_secret
+                api_secret=self.api_secret,
+                recv_window=5000  # Add receive window for authentication
             )
+            
+            # Add default headers
+            self.headers = {
+                "Content-Type": "application/json",
+                "X-BAPI-API-KEY": self.api_key
+            }
             
             self.logger.info("Bybit client initialized successfully")
             
@@ -237,17 +244,34 @@ class AsyncBybitClient:
             raise
 
     async def get_positions(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all positions"""
         try:
+            params = {
+                "category": "linear",
+                "settleCoin": "USDT"
+            }
+            if symbol:
+                params["symbol"] = symbol
+                
+            # Add timestamp and signature
+            timestamp = str(int(datetime.now().timestamp() * 1000))
+            signature = self._get_signature(timestamp, params)
+            
+            headers = {
+                **self.headers,
+                "X-BAPI-TIMESTAMP": timestamp,
+                "X-BAPI-SIGN": signature
+            }
+            
             response = await self._make_request(
-                lambda: self.client.get_positions(
-                    category="linear",
-                    symbol=symbol
-                )
+                lambda: self.client.get_positions(**params),
+                headers=headers
             )
             
             if response.get('retCode') == 0:
                 return response['result']['list']
             raise Exception(f"Failed to get positions: {response.get('retMsg')}")
+            
         except Exception as e:
             self.logger.error(f"Error fetching positions: {str(e)}")
             raise
