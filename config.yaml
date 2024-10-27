@@ -2,8 +2,8 @@ api:
   testnet: true
   base_url: "https://api-testnet.bybit.com"
   rate_limit_margin: 0.95
-  api_key: "YOUR_API_KEY_HERE"
-  api_secret: "YOUR_API_SECRET_HERE"
+  api_key: null
+  api_secret: null
 
 trading:
   interval_seconds: 60

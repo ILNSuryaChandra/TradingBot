@@ -75,13 +75,17 @@ class AsyncBybitClient:
             # Log API configuration (excluding sensitive data)
             self.logger.info(f"Initializing Bybit client with testnet={config['api']['testnet']}")
             
-            # Initialize HTTP client
+            # Initialize HTTP client with proper parameters
             self.client = HTTP(
                 testnet=config['api']['testnet'],
                 api_key=config['api']['api_key'],
-                api_secret=config['api']['api_secret']
+                api_secret=config['api']['api_secret'],
+                recv_window=5000  # Added recv_window parameter
             )
             self.rate_limit_margin = config['api']['rate_limit_margin']
+            
+            # Log successful initialization
+            self.logger.info("Bybit client initialized successfully")
             
         except Exception as e:
             self.logger.error(f"Error initializing Bybit client: {str(e)}")
@@ -96,28 +100,45 @@ class AsyncBybitClient:
             # Log request (excluding sensitive data)
             self.logger.info(f"Requesting balance for {coin}")
             
-            # Make API request
-            response = self.client.get_wallet_balance(
-                accountType="UNIFIED",
-                coin=coin
+            # Make API request with proper accountType
+            response = await self._make_request(
+                lambda: self.client.get_coins_balance(
+                    accountType="SPOT",
+                    coin=coin
+                )
             )
             
             # Log response (excluding sensitive data)
             self.logger.debug(f"Balance response code: {response.get('retCode')}")
             
             if response.get('retCode') == 0:
-                wallet = response['result']['list'][0]
-                total_balance = float(wallet['totalWalletBalance'])
-                self.logger.info(f"Successfully retrieved balance: {total_balance} {coin}")
-                return total_balance
+                balance_info = next(
+                    (coin_info for coin_info in response['result']['balance'] if coin_info['coin'] == coin),
+                    None
+                )
                 
+                if balance_info:
+                    total_balance = float(balance_info['walletBalance'])
+                    self.logger.info(f"Successfully retrieved balance: {total_balance} {coin}")
+                    return total_balance
+                else:
+                    self.logger.warning(f"No balance found for {coin}")
+                    return 0.0
+                    
             error_msg = response.get('retMsg', 'Unknown error')
             self.logger.error(f"Failed to get balance: {error_msg}")
             raise Exception(f"Failed to get balance: {error_msg}")
             
         except Exception as e:
-            self.logger.error(f"Error fetching balance: {str(e)}")
+            error_msg = str(e)
+            if "401" in error_msg:
+                self.logger.error("Authentication failed - please check API credentials")
+            elif "10003" in error_msg:
+                self.logger.error("Invalid API key - please verify the key is correct and has proper permissions")
+            else:
+                self.logger.error(f"Error fetching balance: {error_msg}")
             raise
+
 
     async def get_market_data(self, symbol: str, interval: str, limit: int = 1000) -> pd.DataFrame:
         try:
@@ -294,9 +315,14 @@ class AsyncBybitClient:
 
     async def _make_request(self, request_func, max_retries: int = 3) -> Any:
         """Make API request with retry logic"""
+        last_error = None
+        
         for attempt in range(max_retries):
             try:
+                # Add rate limiting delay
                 await asyncio.sleep(self.rate_limit_margin)
+                
+                # Execute request
                 response = request_func()
                 
                 # Log response code (excluding sensitive data)
@@ -306,11 +332,19 @@ class AsyncBybitClient:
                 return response
                 
             except Exception as e:
-                if attempt == max_retries - 1:
-                    raise
-                self.logger.warning(f"Request failed (attempt {attempt + 1}/{max_retries}): {str(e)}")
-                await asyncio.sleep(1 * (attempt + 1))
-                
+                last_error = e
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2  # Exponential backoff
+                    self.logger.warning(
+                        f"Request failed (attempt {attempt + 1}/{max_retries}): {str(e)}. "
+                        f"Retrying in {wait_time} seconds..."
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    break
+                    
+        raise last_error or Exception("Request failed after all retries")
+
     def _log_request_details(self, method: str, endpoint: str, params: Dict[str, Any]) -> None:
         """Log API request details (excluding sensitive data)"""
         safe_params = {k: v for k, v in params.items() if k not in ['api_key', 'api_secret']}
