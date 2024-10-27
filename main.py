@@ -13,9 +13,16 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('trading_bot.log', encoding='utf-8'),
-        logging.StreamHandler()
+        logging.StreamHandler(sys.stdout)  # Explicitly use stdout for console output
     ]
 )
+
+# Force UTF-8 encoding for stdout/stderr
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
+
 logger = logging.getLogger(__name__)
 
 async def shutdown(trader, loop):
@@ -34,8 +41,22 @@ async def shutdown(trader, loop):
 
 def handle_exception(loop, context):
     """Global exception handler"""
-    msg = context.get('exception', context['message'])
-    logger.error(f"Caught exception: {msg}")
+    exception = context.get('exception', None)
+    msg = context.get('message')
+    
+    if exception:
+        # Get full exception details
+        if isinstance(exception, (KeyboardInterrupt, SystemExit)):
+            return  # Let these exceptions propagate normally
+            
+        error_msg = f"Caught exception: {exception.__class__.__name__}: {str(exception)}"
+        if hasattr(exception, '__traceback__'):
+            import traceback
+            error_msg += f"\nTraceback:\n{''.join(traceback.format_tb(exception.__traceback__))}"
+    else:
+        error_msg = f"Caught exception: {msg}"
+        
+    logger.error(error_msg)
     asyncio.create_task(shutdown(loop))
 
 async def main():
