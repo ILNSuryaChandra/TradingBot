@@ -1,4 +1,5 @@
 # trading_bot/setup.py
+import asyncio
 from pathlib import Path
 import yaml
 import logging
@@ -136,12 +137,12 @@ class TradingBotSetup:
             return False
             
     def validate_configuration(self) -> bool:
-        """Validate the configuration file"""
+        """Validate the configuration file and test API connectivity"""
         try:
             with open(self.config_path, 'r') as f:
                 config = yaml.safe_load(f)
                 
-            # Required configuration sections
+            # Check required sections
             required_sections = [
                 'api',
                 'trading',
@@ -151,7 +152,6 @@ class TradingBotSetup:
                 'risk_management'
             ]
             
-            # Check for required sections
             for section in required_sections:
                 if section not in config:
                     self.logger.error(f"Missing required config section: {section}")
@@ -161,6 +161,33 @@ class TradingBotSetup:
             if not all(k in config['api'] for k in ['testnet', 'base_url', 'api_key', 'api_secret']):
                 self.logger.error("Invalid API configuration")
                 return False
+                
+            # Test API connectivity
+            client = AsyncBybitClient(config)
+            try:
+                # Create event loop for testing
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                # Test API connection
+                response = loop.run_until_complete(client._make_request(
+                    lambda: client.client.get_wallet_balance(
+                        accountType="UNIFIED",
+                        coin="USDT"
+                    )
+                ))
+                
+                if response.get('retCode') != 0:
+                    self.logger.error(f"API connection test failed: {response.get('retMsg')}")
+                    return False
+                    
+                self.logger.info("API connection test successful")
+                
+            except Exception as e:
+                self.logger.error(f"API connection test failed: {str(e)}")
+                return False
+            finally:
+                loop.close()
                 
             # Validate trading configuration
             if not all(k in config['trading'] for k in ['symbols', 'timeframes', 'interval_seconds']):

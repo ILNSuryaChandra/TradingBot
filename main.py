@@ -6,28 +6,38 @@ import signal
 import yaml
 from pathlib import Path
 import sys
+import platform
 
-# Configure logging
+# Configure logging with UTF-8 encoding
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('trading_bot.log'),
+        logging.FileHandler('trading_bot.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-async def shutdown(trader):
+async def shutdown(trader, loop):
     """Handle graceful shutdown"""
     logger.info("Initiating shutdown sequence...")
     await trader.stop()
-    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    
+    # Cancel all tasks except the current one
+    tasks = [t for t in asyncio.all_tasks(loop) if t is not asyncio.current_task()]
     for task in tasks:
         task.cancel()
     logger.info("Waiting for tasks to complete...")
     await asyncio.gather(*tasks, return_exceptions=True)
+    loop.stop()
     logger.info("Shutdown complete")
+
+def handle_exception(loop, context):
+    """Global exception handler"""
+    msg = context.get('exception', context['message'])
+    logger.error(f"Caught exception: {msg}")
+    asyncio.create_task(shutdown(loop))
 
 async def main():
     try:
@@ -61,14 +71,22 @@ async def main():
         # Get the trader instance
         trader = components['trader']
         
-        # Set up signal handlers for graceful shutdown
+        # Set up event loop with proper exception handling
         loop = asyncio.get_running_loop()
-        signals = (signal.SIGTERM, signal.SIGINT)
-        for sig in signals:
-            loop.add_signal_handler(
-                sig,
-                lambda: asyncio.create_task(shutdown(trader))
-            )
+        loop.set_exception_handler(handle_exception)
+        
+        # Set up signal handlers for graceful shutdown
+        if platform.system() != 'Windows':
+            # Unix-style signal handling
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(
+                    sig,
+                    lambda: asyncio.create_task(shutdown(trader, loop))
+                )
+        else:
+            # Windows-specific handling
+            signal.signal(signal.SIGINT, lambda s, f: asyncio.create_task(shutdown(trader, loop)))
+            signal.signal(signal.SIGTERM, lambda s, f: asyncio.create_task(shutdown(trader, loop)))
         
         # Start trading
         logger.info("Starting trading operations...")
@@ -77,11 +95,11 @@ async def main():
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt...")
         if 'trader' in locals():
-            await shutdown(trader)
+            await shutdown(trader, loop)
     except Exception as e:
         logger.error(f"Error in main: {str(e)}")
         if 'trader' in locals():
-            await shutdown(trader)
+            await shutdown(trader, loop)
         raise
     finally:
         logger.info("Trading bot shutdown complete")
@@ -91,7 +109,7 @@ if __name__ == "__main__":
         if sys.platform == 'win32':
             # Set up proper event loop policy for Windows
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        
+            
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
