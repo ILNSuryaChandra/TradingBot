@@ -72,7 +72,6 @@ class AsyncBybitClient:
         self.logger = logging.getLogger(__name__)
         
         try:
-            # Log API configuration (excluding sensitive data)
             self.logger.info(f"Initializing Bybit client with testnet={config['api']['testnet']}")
             
             # Initialize HTTP client with proper parameters
@@ -80,7 +79,7 @@ class AsyncBybitClient:
                 testnet=config['api']['testnet'],
                 api_key=config['api']['api_key'],
                 api_secret=config['api']['api_secret'],
-                recv_window=5000  # Added recv_window parameter
+                recv_window=5000
             )
             self.rate_limit_margin = config['api']['rate_limit_margin']
             
@@ -92,37 +91,34 @@ class AsyncBybitClient:
             raise
         
     async def get_balance(self, coin: str = "USDT") -> float:
-        """Get wallet balance"""
+        """Get wallet balance using wallet account endpoint"""
         try:
-            # Add rate limiting delay
             await asyncio.sleep(self.rate_limit_margin)
             
-            # Log request (excluding sensitive data)
-            self.logger.info(f"Requesting balance for {coin}")
+            self.logger.info(f"Requesting wallet balance for {coin}")
             
-            # Make API request with proper accountType
+            # Use get_wallet_balance instead of get_coins_balance
             response = await self._make_request(
-                lambda: self.client.get_coins_balance(
-                    accountType="SPOT",
+                lambda: self.client.get_wallet_balance(
+                    accountType="UNIFIED",  # Changed from SPOT to UNIFIED
                     coin=coin
                 )
             )
             
-            # Log response (excluding sensitive data)
             self.logger.debug(f"Balance response code: {response.get('retCode')}")
             
             if response.get('retCode') == 0:
-                balance_info = next(
-                    (coin_info for coin_info in response['result']['balance'] if coin_info['coin'] == coin),
-                    None
-                )
+                result = response.get('result', {})
+                list_data = result.get('list', [])
                 
-                if balance_info:
-                    total_balance = float(balance_info['walletBalance'])
+                if list_data:
+                    # Get the first wallet in the list
+                    wallet = list_data[0]
+                    total_balance = float(wallet.get('totalWalletBalance', '0'))
                     self.logger.info(f"Successfully retrieved balance: {total_balance} {coin}")
                     return total_balance
                 else:
-                    self.logger.warning(f"No balance found for {coin}")
+                    self.logger.warning(f"No wallet data found for {coin}")
                     return 0.0
                     
             error_msg = response.get('retMsg', 'Unknown error')
@@ -131,14 +127,38 @@ class AsyncBybitClient:
             
         except Exception as e:
             error_msg = str(e)
-            if "401" in error_msg:
-                self.logger.error("Authentication failed - please check API credentials")
-            elif "10003" in error_msg:
-                self.logger.error("Invalid API key - please verify the key is correct and has proper permissions")
+            if "10003" in error_msg:
+                self.logger.error("Invalid API key or insufficient permissions")
+                self.logger.info("Please ensure API key has 'Contract' permission enabled")
+            elif "401" in error_msg:
+                self.logger.error("Authentication failed. Please check API credentials")
             else:
                 self.logger.error(f"Error fetching balance: {error_msg}")
             raise
 
+    async def test_connection(self) -> bool:
+        """Test API connection using server time endpoint"""
+        try:
+            await asyncio.sleep(self.rate_limit_margin)
+            
+            # Use a public endpoint first to test basic connectivity
+            response = await self._make_request(
+                lambda: self.client.get_server_time()
+            )
+            
+            if response.get('retCode') == 0:
+                self.logger.info("Basic API connectivity test successful")
+                
+                # Now test authenticated endpoint
+                balance_response = await self.get_balance()
+                if balance_response >= 0:
+                    return True
+                    
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"API connection test failed: {str(e)}")
+            return False
 
     async def get_market_data(self, symbol: str, interval: str, limit: int = 1000) -> pd.DataFrame:
         try:
@@ -319,22 +339,25 @@ class AsyncBybitClient:
         
         for attempt in range(max_retries):
             try:
-                # Add rate limiting delay
                 await asyncio.sleep(self.rate_limit_margin)
-                
-                # Execute request
                 response = request_func()
                 
-                # Log response code (excluding sensitive data)
                 if isinstance(response, dict):
-                    self.logger.debug(f"API response code: {response.get('retCode')}")
+                    ret_code = response.get('retCode')
+                    ret_msg = response.get('retMsg', 'No message')
                     
+                    if ret_code == 0:
+                        return response
+                    elif ret_code == 10003:
+                        self.logger.error(f"API key error: {ret_msg}")
+                        raise Exception(f"API key error: {ret_msg}")
+                        
                 return response
                 
             except Exception as e:
                 last_error = e
                 if attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 2  # Exponential backoff
+                    wait_time = (attempt + 1) * 2
                     self.logger.warning(
                         f"Request failed (attempt {attempt + 1}/{max_retries}): {str(e)}. "
                         f"Retrying in {wait_time} seconds..."
@@ -342,6 +365,8 @@ class AsyncBybitClient:
                     await asyncio.sleep(wait_time)
                 else:
                     break
+                    
+        raise last_error or Exception("Request failed after all retries")
                     
         raise last_error or Exception("Request failed after all retries")
 

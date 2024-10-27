@@ -61,7 +61,6 @@ class TradingBotSetup:
     async def test_api_connection(self) -> bool:
         """Test API connectivity"""
         try:
-            # Log test initialization
             self.logger.info("Testing API connection...")
             
             # Log API configuration (excluding sensitive data)
@@ -72,30 +71,22 @@ class TradingBotSetup:
             self.logger.info(f"API Configuration: {api_config}")
             
             # Verify API credentials are loaded
-            if not self.config['api']['api_key'] or not self.config['api']['api_secret']:
+            if not self.config['api'].get('api_key') or not self.config['api'].get('api_secret'):
                 self.logger.error("API credentials not found in configuration")
                 return False
                 
             # Initialize client and test connection
             client = AsyncBybitClient(self.config)
-            response = await client.get_balance()
             
-            if response > 0:
-                self.logger.info(f"API connection test successful. Balance: {response} USDT")
+            # Test basic API connectivity
+            if await client.test_connection():
+                self.logger.info("API connection test successful")
                 return True
-            
-            self.logger.error("API connection test failed: Invalid balance response")
+                
             return False
             
         except Exception as e:
-            error_msg = str(e)
-            if "401" in error_msg:
-                self.logger.error("API authentication failed. Please check your API credentials.")
-                self.logger.debug(f"Full error: {error_msg}")
-            elif "429" in error_msg:
-                self.logger.error("Rate limit exceeded. Please try again later.")
-            else:
-                self.logger.error(f"API connection test failed: {error_msg}")
+            self.logger.error(f"Error during API connection test: {str(e)}")
             return False
             
     def _load_config(self) -> Dict[str, Any]:
