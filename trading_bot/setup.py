@@ -48,7 +48,24 @@ class TradingBotSetup:
         except Exception as e:
             self.logger.error(f"Error loading environment variables: {str(e)}")
             raise
-        
+            
+    async def _test_api_connection(self, config: Dict[str, Any]) -> bool:
+        """Test API connectivity"""
+        try:
+            client = AsyncBybitClient(config)
+            response = await client.get_balance()
+            
+            if response > 0:
+                self.logger.info("API connection test successful")
+                return True
+            
+            self.logger.error("API connection test failed: Invalid response")
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"API connection test failed: {str(e)}")
+            return False
+            
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from yaml file"""
         try:
@@ -93,8 +110,8 @@ class TradingBotSetup:
             log_dir = self.base_path / 'logs'
             log_dir.mkdir(parents=True, exist_ok=True)
             
-            # File handler
-            fh = logging.FileHandler(log_dir / 'trading_bot.log')
+            # File handler with UTF-8 encoding
+            fh = logging.FileHandler(log_dir / 'trading_bot.log', encoding='utf-8')
             fh.setLevel(logging.INFO)
             
             # Console handler
@@ -128,7 +145,7 @@ class TradingBotSetup:
             ]
             
             for directory in directories:
-                Path(directory).mkdir(parents=True, exist_ok=True)
+                (self.base_path / directory).mkdir(parents=True, exist_ok=True)
                 
             self.logger.info("Directory structure created successfully")
             return True
@@ -136,12 +153,9 @@ class TradingBotSetup:
             self.logger.error(f"Error creating directory structure: {str(e)}")
             return False
             
-    def validate_configuration(self) -> bool:
-        """Validate the configuration file and test API connectivity"""
+    async def async_validate_configuration(self) -> bool:
+        """Validate the configuration file asynchronously"""
         try:
-            with open(self.config_path, 'r') as f:
-                config = yaml.safe_load(f)
-                
             # Check required sections
             required_sections = [
                 'api',
@@ -153,52 +167,45 @@ class TradingBotSetup:
             ]
             
             for section in required_sections:
-                if section not in config:
+                if section not in self.config:
                     self.logger.error(f"Missing required config section: {section}")
                     return False
                     
             # Validate API configuration
-            if not all(k in config['api'] for k in ['testnet', 'base_url', 'api_key', 'api_secret']):
+            if not all(k in self.config['api'] for k in ['testnet', 'base_url', 'api_key', 'api_secret']):
                 self.logger.error("Invalid API configuration")
                 return False
-                
+
             # Test API connectivity
-            client = AsyncBybitClient(config)
-            try:
-                # Create event loop for testing
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                # Test API connection
-                response = loop.run_until_complete(client._make_request(
-                    lambda: client.client.get_wallet_balance(
-                        accountType="UNIFIED",
-                        coin="USDT"
-                    )
-                ))
-                
-                if response.get('retCode') != 0:
-                    self.logger.error(f"API connection test failed: {response.get('retMsg')}")
-                    return False
-                    
-                self.logger.info("API connection test successful")
-                
-            except Exception as e:
-                self.logger.error(f"API connection test failed: {str(e)}")
+            if not await self._test_api_connection(self.config):
                 return False
-            finally:
-                loop.close()
                 
             # Validate trading configuration
-            if not all(k in config['trading'] for k in ['symbols', 'timeframes', 'interval_seconds']):
+            if not all(k in self.config['trading'] for k in ['symbols', 'timeframes', 'interval_seconds']):
                 self.logger.error("Invalid trading configuration")
                 return False
                 
-            self.logger.info("Config loaded and validated successfully")
+            self.logger.info("Config validated successfully")
             return True
             
         except Exception as e:
             self.logger.error(f"Error validating configuration: {str(e)}")
+            return False
+
+    def validate_configuration(self) -> bool:
+        """Synchronous wrapper for configuration validation"""
+        try:
+            # Create a new event loop for the validation
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                return loop.run_until_complete(self.async_validate_configuration())
+            finally:
+                loop.close()
+                
+        except Exception as e:
+            self.logger.error(f"Error in configuration validation: {str(e)}")
             return False
             
     def initialize_components(self) -> Dict[str, Any]:
@@ -206,28 +213,24 @@ class TradingBotSetup:
         try:
             self.logger.info("Starting component initialization...")
             
-            # Load configuration
-            with open(self.config_path, 'r') as f:
-                config = yaml.safe_load(f)
-                
             # Initialize client
-            client = AsyncBybitClient(config)
+            client = AsyncBybitClient(self.config)
             self.logger.info("Client initialized")
             
             # Initialize risk manager
-            risk_manager = RiskManager(config, client)
+            risk_manager = RiskManager(self.config, client)
             self.logger.info("Risk manager initialized")
             
             # Initialize model ensemble
-            model_ensemble = ModelEnsemble(config)
+            model_ensemble = ModelEnsemble(self.config)
             self.logger.info("Model ensemble initialized")
             
             # Initialize strategy
-            strategy = TradingStrategy(config, model_ensemble)
+            strategy = TradingStrategy(self.config, model_ensemble)
             self.logger.info("Strategy initialized")
             
             # Initialize trader
-            trader = AutonomousTrader(config)
+            trader = AutonomousTrader(self.config)
             self.logger.info("Trader initialized")
             
             components = {
