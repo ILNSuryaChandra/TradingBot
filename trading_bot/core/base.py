@@ -157,7 +157,68 @@ class AsyncBybitClient:
             self.logger.error(f"Error fetching positions: {str(e)}")
             raise
 
+    async def get_active_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all active orders"""
+        try:
+            response = await self._make_request(
+                lambda: self.client.get_open_orders(
+                    category="linear",
+                    symbol=symbol,
+                    settleCoin="USDT"
+                )
+            )
+            
+            if response.get('retCode') == 0:
+                return response['result']['list']
+            raise Exception(f"Failed to get active orders: {response.get('retMsg')}")
+        except Exception as e:
+            self.logger.error(f"Error getting active orders: {str(e)}")
+            raise
+
+    async def get_order_history(
+        self,
+        symbol: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Get order history"""
+        try:
+            response = await self._make_request(
+                lambda: self.client.get_order_history(
+                    category="linear",
+                    symbol=symbol,
+                    limit=limit
+                )
+            )
+            
+            if response.get('retCode') == 0:
+                return response['result']['list']
+            raise Exception(f"Failed to get order history: {response.get('retMsg')}")
+        except Exception as e:
+            self.logger.error(f"Error getting order history: {str(e)}")
+            raise
+
+    async def cancel_all_orders(self, symbol: str) -> Dict[str, Any]:
+        """Cancel all active orders for a symbol"""
+        try:
+            response = await self._make_request(
+                lambda: self.client.cancel_all_orders(
+                    category="linear",
+                    symbol=symbol,
+                    baseCoin=None,
+                    settleCoin="USDT"
+                )
+            )
+            
+            if response.get('retCode') == 0:
+                self.logger.info(f"Successfully cancelled all orders for {symbol}")
+                return response['result']
+            raise Exception(f"Failed to cancel orders: {response.get('retMsg')}")
+        except Exception as e:
+            self.logger.error(f"Error cancelling all orders: {str(e)}")
+            raise
+
     async def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        """Cancel a specific order"""
         try:
             response = await self._make_request(
                 lambda: self.client.cancel_order(
@@ -168,6 +229,7 @@ class AsyncBybitClient:
             )
             
             if response.get('retCode') == 0:
+                self.logger.info(f"Successfully cancelled order {order_id} for {symbol}")
                 return response['result']
             raise Exception(f"Failed to cancel order: {response.get('retMsg')}")
         except Exception as e:

@@ -119,6 +119,7 @@ class AutonomousTrader:
             raise
             
     async def stop(self):
+        """Stop the trading bot gracefully"""
         try:
             self.logger.info("Stopping autonomous trader...")
             self.is_running = False
@@ -126,17 +127,24 @@ class AutonomousTrader:
             # Save final state
             self._save_current_state()
             
-            # Close all positions
-            await self._close_all_positions()
+            # Close all positions first
+            try:
+                await self._close_all_positions()
+            except Exception as e:
+                self.logger.error(f"Error closing positions: {str(e)}")
             
-            # Cancel all pending orders
-            await self._cancel_all_orders()
+            # Then try to cancel all orders
+            for symbol in self.config['trading']['symbols']:
+                try:
+                    await self.client.cancel_all_orders(symbol)
+                except Exception as e:
+                    self.logger.error(f"Error cancelling orders for {symbol}: {str(e)}")
             
             self.logger.info("Trader stopped successfully")
             
         except Exception as e:
             self.logger.error(f"Error stopping trader: {str(e)}")
-            raise
+            # Don't re-raise the exception to allow for graceful shutdown
             
     async def _initialize_market_data(self):
         """Initialize market data for all configured symbols and timeframes"""
@@ -440,11 +448,19 @@ class AutonomousTrader:
                 await asyncio.sleep(5)
                 
     async def _close_all_positions(self):
+        """Close all open positions"""
         try:
-            for symbol in list(self.active_positions.keys()):
-                await self._exit_position(symbol, {'signal': {'action': 'exit'}})
+            positions = list(self.active_positions.values())
+            for position in positions:
+                try:
+                    await self._exit_position(
+                        position.symbol,
+                        {'signal': {'action': 'exit'}}
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error closing position {position.symbol}: {str(e)}")
         except Exception as e:
-            self.logger.error(f"Error closing all positions: {str(e)}")
+            self.logger.error(f"Error in _close_all_positions: {str(e)}")
             raise
             
     async def _cancel_all_orders(self):
