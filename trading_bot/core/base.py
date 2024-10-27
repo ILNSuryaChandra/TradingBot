@@ -69,27 +69,52 @@ class MarketRegime(Enum):
 class AsyncBybitClient:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.client = HTTP(
-            testnet=config['api']['testnet'],
-            api_key=config['api']['api_key'],
-            api_secret=config['api']['api_secret']
-        )
-        self.rate_limit_margin = config['api']['rate_limit_margin']
         self.logger = logging.getLogger(__name__)
+        
+        try:
+            # Log API configuration (excluding sensitive data)
+            self.logger.info(f"Initializing Bybit client with testnet={config['api']['testnet']}")
+            
+            # Initialize HTTP client
+            self.client = HTTP(
+                testnet=config['api']['testnet'],
+                api_key=config['api']['api_key'],
+                api_secret=config['api']['api_secret']
+            )
+            self.rate_limit_margin = config['api']['rate_limit_margin']
+            
+        except Exception as e:
+            self.logger.error(f"Error initializing Bybit client: {str(e)}")
+            raise
         
     async def get_balance(self, coin: str = "USDT") -> float:
         """Get wallet balance"""
         try:
-            await asyncio.sleep(self.rate_limit_margin)  # Rate limiting
+            # Add rate limiting delay
+            await asyncio.sleep(self.rate_limit_margin)
+            
+            # Log request (excluding sensitive data)
+            self.logger.info(f"Requesting balance for {coin}")
+            
+            # Make API request
             response = self.client.get_wallet_balance(
                 accountType="UNIFIED",
                 coin=coin
             )
             
+            # Log response (excluding sensitive data)
+            self.logger.debug(f"Balance response code: {response.get('retCode')}")
+            
             if response.get('retCode') == 0:
                 wallet = response['result']['list'][0]
-                return float(wallet['totalWalletBalance'])
-            raise Exception(f"Failed to get balance: {response.get('retMsg')}")
+                total_balance = float(wallet['totalWalletBalance'])
+                self.logger.info(f"Successfully retrieved balance: {total_balance} {coin}")
+                return total_balance
+                
+            error_msg = response.get('retMsg', 'Unknown error')
+            self.logger.error(f"Failed to get balance: {error_msg}")
+            raise Exception(f"Failed to get balance: {error_msg}")
+            
         except Exception as e:
             self.logger.error(f"Error fetching balance: {str(e)}")
             raise
@@ -267,16 +292,30 @@ class AsyncBybitClient:
             self.logger.error(f"Error closing position: {str(e)}")
             raise
 
-    async def _make_request(self, request_func, max_retries: int = 3):
+    async def _make_request(self, request_func, max_retries: int = 3) -> Any:
         """Make API request with retry logic"""
         for attempt in range(max_retries):
             try:
-                await asyncio.sleep(self.rate_limit_margin)  # Rate limiting
-                return request_func()
+                await asyncio.sleep(self.rate_limit_margin)
+                response = request_func()
+                
+                # Log response code (excluding sensitive data)
+                if isinstance(response, dict):
+                    self.logger.debug(f"API response code: {response.get('retCode')}")
+                    
+                return response
+                
             except Exception as e:
                 if attempt == max_retries - 1:
                     raise
+                self.logger.warning(f"Request failed (attempt {attempt + 1}/{max_retries}): {str(e)}")
                 await asyncio.sleep(1 * (attempt + 1))
+                
+    def _log_request_details(self, method: str, endpoint: str, params: Dict[str, Any]) -> None:
+        """Log API request details (excluding sensitive data)"""
+        safe_params = {k: v for k, v in params.items() if k not in ['api_key', 'api_secret']}
+        self.logger.debug(f"Making {method} request to {endpoint}")
+        self.logger.debug(f"Parameters: {safe_params}")
 
 class ConfigManager:
     def __init__(self, config_path: str):

@@ -33,8 +33,16 @@ class TradingBotSetup:
         try:
             env_path = self.base_path / '.env'
             if not env_path.exists():
-                self.logger.warning(".env file not found at: %s", env_path)
+                self.logger.warning(f".env file not found at: {env_path}")
+                
             load_dotenv(env_path)
+            
+            # Check and log API key presence (without exposing the actual key)
+            api_key = os.getenv('BYBIT_API_KEY')
+            api_secret = os.getenv('BYBIT_API_SECRET')
+            
+            self.logger.info(f"API Key found: {bool(api_key)}")
+            self.logger.info(f"API Secret found: {bool(api_secret)}")
             
             # Check required environment variables
             required_env_vars = ['BYBIT_API_KEY', 'BYBIT_API_SECRET']
@@ -42,28 +50,52 @@ class TradingBotSetup:
             
             if missing_vars:
                 raise ValueError(f"Missing required environment variables: {missing_vars}")
-                
+            
             self.logger.info("Environment variables loaded successfully")
             
         except Exception as e:
             self.logger.error(f"Error loading environment variables: {str(e)}")
             raise
-            
+    
+
     async def test_api_connection(self) -> bool:
         """Test API connectivity"""
         try:
+            # Log test initialization
+            self.logger.info("Testing API connection...")
+            
+            # Log API configuration (excluding sensitive data)
+            api_config = {
+                'testnet': self.config['api']['testnet'],
+                'base_url': self.config['api']['base_url']
+            }
+            self.logger.info(f"API Configuration: {api_config}")
+            
+            # Verify API credentials are loaded
+            if not self.config['api']['api_key'] or not self.config['api']['api_secret']:
+                self.logger.error("API credentials not found in configuration")
+                return False
+                
+            # Initialize client and test connection
             client = AsyncBybitClient(self.config)
             response = await client.get_balance()
             
             if response > 0:
-                self.logger.info("API connection test successful")
+                self.logger.info(f"API connection test successful. Balance: {response} USDT")
                 return True
             
-            self.logger.error("API connection test failed: Invalid response")
+            self.logger.error("API connection test failed: Invalid balance response")
             return False
             
         except Exception as e:
-            self.logger.error(f"API connection test failed: {str(e)}")
+            error_msg = str(e)
+            if "401" in error_msg:
+                self.logger.error("API authentication failed. Please check your API credentials.")
+                self.logger.debug(f"Full error: {error_msg}")
+            elif "429" in error_msg:
+                self.logger.error("Rate limit exceeded. Please try again later.")
+            else:
+                self.logger.error(f"API connection test failed: {error_msg}")
             return False
             
     def _load_config(self) -> Dict[str, Any]:
