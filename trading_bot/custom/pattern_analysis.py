@@ -387,82 +387,312 @@ class AdvancedPatternRecognition(CustomIndicator):
         
         return min(max(strength, 0), 1)
 
-    def _detect_double_bottom(self, data: pd.DataFrame, window: int) -> np.ndarray:
-        """Detect double bottom patterns"""
-        result = np.zeros(len(data))
-        
-        for i in range(window, len(data)):
-            section = data['low'].iloc[i-window:i]
-            troughs = self._find_troughs(section)
-            
-            if len(troughs) >= 2:
-                last_two_troughs = troughs[-2:]
-                if abs(section[last_two_troughs[0]] - section[last_two_troughs[1]]) < section.std() * 0.1:
-                    result[i] = 1
-                    
-        return result
-        
-    def _detect_head_and_shoulders(self, data: pd.DataFrame, window: int) -> np.ndarray:
-        """Detect head and shoulders patterns"""
-        result = np.zeros(len(data))
-        
-        for i in range(window, len(data)):
-            section = data['high'].iloc[i-window:i]
-            peaks = self._find_peaks(section)
-            
-            if len(peaks) >= 3:
-                # Check for head and shoulders pattern
-                left = peaks[-3]
-                head = peaks[-2]
-                right = peaks[-1]
+    def _is_double_bottom(self, data: pd.DataFrame) -> bool:
+        """Detect double bottom pattern"""
+        try:
+            # Find potential bottom points
+            lows = self._find_troughs(data['low'])
+            if len(lows) < 2:
+                return False
                 
-                if (section[head] > section[left] and 
-                    section[head] > section[right] and
-                    abs(section[left] - section[right]) < section.std() * 0.1):
-                    result[i] = 1
+            # Check last two troughs
+            last_low = data['low'].iloc[lows[-1]]
+            prev_low = data['low'].iloc[lows[-2]]
+            
+            # Verify pattern
+            if (abs(last_low - prev_low) / last_low < 0.01 and  # Troughs at similar levels
+                max(data['high'].iloc[lows[-2]:lows[-1]]) > max(last_low, prev_low)):
+                return True
+                
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Error detecting double bottom: {str(e)}")
+            return False
+    
+    def _is_double_top(self, data: pd.DataFrame) -> bool:
+        """Detect double top pattern"""
+        try:
+            # Find potential top points
+            highs = self._find_peaks(data['high'])
+            if len(highs) < 2:
+                return False
+                
+            # Check last two peaks
+            last_high = data['high'].iloc[highs[-1]]
+            prev_high = data['high'].iloc[highs[-2]]
+            
+            # Verify pattern
+            if (abs(last_high - prev_high) / last_high < 0.01 and  # Peaks at similar levels
+                min(data['low'].iloc[highs[-2]:highs[-1]]) < min(last_high, prev_high)):
+                return True
+                
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Error detecting double top: {str(e)}")
+            return False
+        
+    def _is_head_and_shoulders(self, data: pd.DataFrame) -> bool:
+        """Detect head and shoulders pattern"""
+        try:
+            # Find potential shoulder and head points
+            highs = self._find_peaks(data['high'])
+            if len(highs) < 3:
+                return False
+                
+            # Check formation
+            for i in range(len(highs) - 2):
+                left = data['high'].iloc[highs[i]]
+                head = data['high'].iloc[highs[i + 1]]
+                right = data['high'].iloc[highs[i + 2]]
+                
+                # Verify pattern geometry
+                if (head > left and head > right and
+                    abs(left - right) / left < 0.02):  # Shoulders should be at similar levels
+                    return True
                     
-        return result
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Error detecting head and shoulders: {str(e)}")
+            return False
         
-    def _detect_triangle(self, data: pd.DataFrame, window: int) -> np.ndarray:
-        """Detect triangle patterns"""
-        result = np.zeros(len(data))
-        
-        for i in range(window, len(data)):
-            section = data.iloc[i-window:i]
-            highs = section['high']
-            lows = section['low']
+    def _identify_triangle(self, data: pd.DataFrame) -> Optional[str]:
+        """Identify triangle pattern type"""
+        try:
+            # Get highs and lows
+            highs = data['high'].rolling(5).max()
+            lows = data['low'].rolling(5).min()
             
             # Calculate trend lines
-            high_slope = np.polyfit(range(len(highs)), highs, 1)[0]
-            low_slope = np.polyfit(range(len(lows)), lows, 1)[0]
+            high_slope = self._calculate_slope(highs)
+            low_slope = self._calculate_slope(lows)
             
-            # Detect triangle patterns
+            # Identify triangle type
             if abs(high_slope) < 0.001 and abs(low_slope) < 0.001:
-                result[i] = 1  # Symmetrical triangle
+                return "symmetrical"
             elif high_slope < -0.001 and abs(low_slope) < 0.001:
-                result[i] = 2  # Descending triangle
+                return "descending"
             elif abs(high_slope) < 0.001 and low_slope > 0.001:
-                result[i] = 3  # Ascending triangle
+                return "ascending"
                 
-        return result
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error identifying triangle: {str(e)}")
+            return None
         
-    def _identify_wedge(self, data: pd.DataFrame, window: int) -> np.ndarray:
-        """Identify wedge patterns"""
-        result = np.zeros(len(data))
-        
-        for i in range(window, len(data)):
-            section = data.iloc[i-window:i]
-            highs = section['high']
-            lows = section['low']
+    def _identify_wedge(self, data: pd.DataFrame) -> Optional[str]:
+        """Identify wedge pattern type"""
+        try:
+            # Get highs and lows
+            highs = data['high'].rolling(5).max()
+            lows = data['low'].rolling(5).min()
             
             # Calculate trend lines
-            high_slope = np.polyfit(range(len(highs)), highs, 1)[0]
-            low_slope = np.polyfit(range(len(lows)), lows, 1)[0]
+            high_slope = self._calculate_slope(highs)
+            low_slope = self._calculate_slope(lows)
             
-            # Detect wedge patterns
+            # Identify wedge type
             if high_slope < 0 and low_slope < 0 and high_slope < low_slope:
-                result[i] = 1  # Falling wedge
+                return "falling"
             elif high_slope > 0 and low_slope > 0 and high_slope > low_slope:
-                result[i] = 2  # Rising wedge
+                return "rising"
                 
-        return result
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error identifying wedge: {str(e)}")
+            return None
+    
+    def _find_peaks(self, series: pd.Series, window: int = 5) -> List[int]:
+        """Find peak points in a series"""
+        peaks = []
+        for i in range(window, len(series) - window):
+            if all(series.iloc[i] > series.iloc[i-j] for j in range(1, window+1)) and \
+            all(series.iloc[i] > series.iloc[i+j] for j in range(1, window+1)):
+                peaks.append(i)
+        return peaks
+
+    def _find_troughs(self, series: pd.Series, window: int = 5) -> List[int]:
+        """Find trough points in a series"""
+        troughs = []
+        for i in range(window, len(series) - window):
+            if all(series.iloc[i] < series.iloc[i-j] for j in range(1, window+1)) and \
+            all(series.iloc[i] < series.iloc[i+j] for j in range(1, window+1)):
+                troughs.append(i)
+        return troughs
+
+    def _calculate_slope(self, series: pd.Series) -> float:
+        """Calculate linear regression slope"""
+        x = np.arange(len(series))
+        y = series.values
+        return np.polyfit(x, y, 1)[0]
+    
+    def _check_wave_time_proportions(self, wave_points: List[int]) -> float:
+        """Check if wave time proportions follow Elliott Wave principles"""
+        if len(wave_points) < 2:
+            return 0
+            
+        intervals = np.diff(wave_points)
+        avg_interval = np.mean(intervals)
+        deviations = np.abs(intervals - avg_interval) / avg_interval
+        return 1 - min(np.mean(deviations), 1)
+
+    def _calculate_trend_strength(self, series: pd.Series) -> float:
+        """Calculate trend strength using linear regression R-squared"""
+        x = np.arange(len(series))
+        y = series.values
+        slope, intercept = np.polyfit(x, y, 1)
+        y_pred = slope * x + intercept
+        r_squared = 1 - np.sum((y - y_pred) ** 2) / np.sum((y - y.mean()) ** 2)
+        return min(max(r_squared, 0), 1)
+
+    def _calculate_pattern_confidence(self, window: pd.DataFrame) -> float:
+        """Calculate confidence score for pattern"""
+        try:
+            # Volume confirmation
+            volume = window['volume']
+            avg_volume = volume.mean()
+            vol_score = float(volume.iloc[-1] > avg_volume)
+            
+            # Trend strength
+            trend_score = self._calculate_trend_strength(window['close'])
+            
+            # Price action confirmation
+            close = window['close']
+            price_score = abs(close.pct_change().mean()) / close.pct_change().std()
+            
+            # Combine scores
+            confidence = (
+                0.4 * vol_score +
+                0.4 * trend_score +
+                0.2 * min(price_score, 1.0)
+            )
+            
+            return min(max(confidence, 0), 1)
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating pattern confidence: {str(e)}")
+            return 0
+    
+    def _validate_impulse_wave(self, data: pd.DataFrame, wave_points: List[int]) -> bool:
+        """Validate Elliott impulse wave pattern"""
+        try:
+            if len(wave_points) != 5:
+                return False
+                
+            # Get wave prices
+            wave_prices = data['close'].iloc[wave_points]
+            
+            # Rule 1: Wave 2 cannot retrace more than 100% of wave 1
+            wave1_size = abs(wave_prices[1] - wave_prices[0])
+            wave2_size = abs(wave_prices[2] - wave_prices[1])
+            if wave2_size > wave1_size:
+                return False
+                
+            # Rule 2: Wave 3 cannot be the shortest among waves 1, 3, and 5
+            wave3_size = abs(wave_prices[3] - wave_prices[2])
+            wave5_size = abs(wave_prices[4] - wave_prices[3])
+            if wave3_size < wave1_size or wave3_size < wave5_size:
+                return False
+                
+            # Rule 3: Wave 4 cannot overlap with wave 1
+            if wave_prices[3] < wave_prices[1]:
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error validating impulse wave: {str(e)}")
+            return False
+
+    def _validate_corrective_wave(self, data: pd.DataFrame, wave_points: List[int]) -> bool:
+        """Validate Elliott corrective wave pattern"""
+        try:
+            if len(wave_points) != 3:
+                return False
+                
+            # Get wave prices
+            wave_prices = data['close'].iloc[wave_points]
+            
+            # Rule 1: Wave B should not exceed the start of wave A
+            if wave_prices[1] > wave_prices[0]:
+                return False
+                
+            # Rule 2: Wave C should extend beyond the end of wave A
+            if wave_prices[2] > wave_prices[1]:
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error validating corrective wave: {str(e)}")
+            return False
+
+    def _calculate_wave_confidence(self, data: pd.DataFrame, wave_points: List[int]) -> float:
+        """Calculate confidence score for Elliott wave pattern"""
+        try:
+            # Get wave prices and volumes
+            prices = data['close'].iloc[wave_points]
+            volumes = data['volume'].iloc[wave_points]
+            
+            # Check price movements
+            price_moves = np.diff(prices)
+            price_confidence = np.mean([
+                1 if move > 0 else 0 for move in price_moves
+            ])
+            
+            # Check volume confirmation
+            volume_confirms = np.mean([
+                1 if vol > volumes.mean() else 0 for vol in volumes
+            ])
+            
+            # Check time proportions
+            time_confidence = self._check_wave_time_proportions(wave_points)
+            
+            # Combine confidence scores
+            confidence = (
+                0.4 * price_confidence +
+                0.3 * volume_confirms +
+                0.3 * time_confidence
+            )
+            
+            return min(max(confidence, 0), 1)
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating wave confidence: {str(e)}")
+            return 0
+
+    def _calculate_wyckoff_confidence(self, data: pd.DataFrame) -> float:
+        """Calculate confidence score for Wyckoff pattern"""
+        try:
+            # Calculate volume characteristics
+            volume = data['volume']
+            price = data['close']
+            
+            # Volume tests
+            volume_climax = volume.iloc[-1] > volume.mean() * 2
+            volume_declining = volume.iloc[-5:].mean() < volume.iloc[-10:-5].mean()
+            
+            # Price tests
+            price_range = data['high'] - data['low']
+            range_narrowing = price_range.iloc[-5:].mean() < price_range.iloc[-10:-5].mean()
+            
+            # Spring test (if applicable)
+            spring_present = price.iloc[-1] > price.iloc[-2] and volume.iloc[-1] > volume.mean()
+            
+            # Calculate confidence score
+            confidence = sum([
+                0.3 if volume_climax else 0,
+                0.2 if volume_declining else 0,
+                0.2 if range_narrowing else 0,
+                0.3 if spring_present else 0
+            ])
+            
+            return min(max(confidence, 0), 1)
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating Wyckoff confidence: {str(e)}")
+            return 0
