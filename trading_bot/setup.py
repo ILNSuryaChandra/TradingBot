@@ -49,10 +49,10 @@ class TradingBotSetup:
             self.logger.error(f"Error loading environment variables: {str(e)}")
             raise
             
-    async def _test_api_connection(self, config: Dict[str, Any]) -> bool:
+    async def test_api_connection(self) -> bool:
         """Test API connectivity"""
         try:
-            client = AsyncBybitClient(config)
+            client = AsyncBybitClient(self.config)
             response = await client.get_balance()
             
             if response > 0:
@@ -193,17 +193,40 @@ class TradingBotSetup:
             return False
 
     def validate_configuration(self) -> bool:
-        """Synchronous wrapper for configuration validation"""
+        """Validate the configuration file"""
         try:
-            # Create a new event loop for the validation
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Check required sections
+            required_sections = [
+                'api',
+                'trading',
+                'models',
+                'strategy',
+                'monitoring',
+                'risk_management'
+            ]
             
-            try:
-                return loop.run_until_complete(self.async_validate_configuration())
-            finally:
-                loop.close()
+            for section in required_sections:
+                if section not in self.config:
+                    self.logger.error(f"Missing required config section: {section}")
+                    return False
+                    
+            # Validate API configuration
+            if not all(k in self.config['api'] for k in ['testnet', 'base_url', 'api_key', 'api_secret']):
+                self.logger.error("Invalid API configuration")
+                return False
                 
+            if not self.config['api']['api_key'] or not self.config['api']['api_secret']:
+                self.logger.error("API credentials not properly loaded from environment variables")
+                return False
+                
+            # Validate trading configuration
+            if not all(k in self.config['trading'] for k in ['symbols', 'timeframes', 'interval_seconds']):
+                self.logger.error("Invalid trading configuration")
+                return False
+                
+            self.logger.info("Initial configuration validation successful")
+            return True
+            
         except Exception as e:
             self.logger.error(f"Error in configuration validation: {str(e)}")
             return False

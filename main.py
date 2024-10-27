@@ -6,7 +6,6 @@ import signal
 import yaml
 from pathlib import Path
 import sys
-import platform
 
 # Configure logging with UTF-8 encoding
 logging.basicConfig(
@@ -59,9 +58,14 @@ async def main():
         # Create directory structure
         setup.setup_directory_structure()
         
-        # Validate configuration
+        # Initial validation
         if not setup.validate_configuration():
             logger.error("Invalid configuration. Exiting...")
+            return
+            
+        # Test API connection
+        if not await setup.test_api_connection():
+            logger.error("API connection test failed. Exiting...")
             return
             
         # Initialize components
@@ -76,8 +80,7 @@ async def main():
         loop.set_exception_handler(handle_exception)
         
         # Set up signal handlers for graceful shutdown
-        if platform.system() != 'Windows':
-            # Unix-style signal handling
+        if sys.platform != 'win32':
             for sig in (signal.SIGTERM, signal.SIGINT):
                 loop.add_signal_handler(
                     sig,
@@ -94,11 +97,11 @@ async def main():
         
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt...")
-        if 'trader' in locals():
+        if 'trader' in locals() and 'loop' in locals():
             await shutdown(trader, loop)
     except Exception as e:
         logger.error(f"Error in main: {str(e)}")
-        if 'trader' in locals():
+        if 'trader' in locals() and 'loop' in locals():
             await shutdown(trader, loop)
         raise
     finally:
