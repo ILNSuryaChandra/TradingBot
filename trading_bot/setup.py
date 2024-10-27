@@ -6,6 +6,11 @@ from typing import Dict, Any
 import os
 from dotenv import load_dotenv
 
+from .core.base import AsyncBybitClient
+from .core.risk_management import RiskManager
+from .models.ml_models import ModelEnsemble, TradingStrategy
+from .core.trader import AutonomousTrader
+
 __version__ = '0.1.0'
 
 class TradingBotSetup:
@@ -109,94 +114,106 @@ class TradingBotSetup:
         return logger
         
     def setup_directory_structure(self):
-        """Create necessary directories"""
+        """Create necessary directories for the trading bot"""
         try:
-            directories = ['data', 'logs', 'models', 'results', 'configs']
+            # Create main directories
+            directories = [
+                'logs',
+                'data',
+                'models',
+                'state',
+                'state/backups',
+                'analytics'
+            ]
             
             for directory in directories:
-                dir_path = self.base_path / directory
-                dir_path.mkdir(parents=True, exist_ok=True)
+                Path(directory).mkdir(parents=True, exist_ok=True)
                 
             self.logger.info("Directory structure created successfully")
-            
+            return True
         except Exception as e:
             self.logger.error(f"Error creating directory structure: {str(e)}")
-            raise
+            return False
             
     def validate_configuration(self) -> bool:
         """Validate the configuration file"""
         try:
+            with open(self.config_path, 'r') as f:
+                config = yaml.safe_load(f)
+                
+            # Required configuration sections
+            required_sections = [
+                'api',
+                'trading',
+                'models',
+                'strategy',
+                'monitoring',
+                'risk_management'
+            ]
+            
+            # Check for required sections
+            for section in required_sections:
+                if section not in config:
+                    self.logger.error(f"Missing required config section: {section}")
+                    return False
+                    
             # Validate API configuration
-            api_config = self.config['api']
-            required_api_fields = ['testnet', 'base_url', 'rate_limit_margin', 'api_key', 'api_secret']
-            
-            for field in required_api_fields:
-                if not api_config.get(field):
-                    self.logger.error(f"Missing or empty required API field: {field}")
-                    return False
-                    
+            if not all(k in config['api'] for k in ['testnet', 'base_url', 'api_key', 'api_secret']):
+                self.logger.error("Invalid API configuration")
+                return False
+                
             # Validate trading configuration
-            trading_config = self.config['trading']
-            required_trading_fields = ['interval_seconds', 'symbols', 'timeframes', 'position_management']
-            
-            for field in required_trading_fields:
-                if field not in trading_config:
-                    self.logger.error(f"Missing required trading field: {field}")
-                    return False
-                    
-            # Validate model configuration
-            models_config = self.config['models']
-            required_model_fields = ['training']
-            
-            for field in required_model_fields:
-                if field not in models_config:
-                    self.logger.error(f"Missing required model field: {field}")
-                    return False
-                    
-            self.logger.info("Configuration validation successful")
+            if not all(k in config['trading'] for k in ['symbols', 'timeframes', 'interval_seconds']):
+                self.logger.error("Invalid trading configuration")
+                return False
+                
+            self.logger.info("Config loaded and validated successfully")
             return True
             
         except Exception as e:
-            self.logger.error(f"Configuration validation failed: {str(e)}")
+            self.logger.error(f"Error validating configuration: {str(e)}")
             return False
             
     def initialize_components(self) -> Dict[str, Any]:
         """Initialize all trading bot components"""
-        from .core.trader import AutonomousTrader
-        from .core.risk_management import RiskManager
-        from .core.base import AsyncBybitClient
-        from .models.ml_models import ModelEnsemble
-        from .custom.strategy_integration import AdvancedStrategyIntegration
-        
         try:
             self.logger.info("Starting component initialization...")
-            components = {}
             
-            # Verify config is loaded
-            if not self.config:
-                raise ValueError("Config not loaded")
+            # Load configuration
+            with open(self.config_path, 'r') as f:
+                config = yaml.safe_load(f)
                 
-            # Initialize each component with detailed logging
-            components['client'] = AsyncBybitClient(self.config)
+            # Initialize client
+            client = AsyncBybitClient(config)
             self.logger.info("Client initialized")
             
-            components['risk_manager'] = RiskManager(self.config, components['client'])
+            # Initialize risk manager
+            risk_manager = RiskManager(config, client)
             self.logger.info("Risk manager initialized")
             
-            components['model_ensemble'] = ModelEnsemble(self.config)
+            # Initialize model ensemble
+            model_ensemble = ModelEnsemble(config)
             self.logger.info("Model ensemble initialized")
             
-            components['strategy'] = AdvancedStrategyIntegration(self.config)
+            # Initialize strategy
+            strategy = TradingStrategy(config, model_ensemble)
             self.logger.info("Strategy initialized")
             
-            components['trader'] = AutonomousTrader(self.config)
+            # Initialize trader
+            trader = AutonomousTrader(config)
             self.logger.info("Trader initialized")
+            
+            components = {
+                'client': client,
+                'risk_manager': risk_manager,
+                'model_ensemble': model_ensemble,
+                'strategy': strategy,
+                'trader': trader
+            }
             
             self.logger.info("All components initialized successfully")
             return components
             
         except Exception as e:
             self.logger.error(f"Error initializing components: {str(e)}")
-            if self.config:
-                self.logger.error(f"Available config sections: {list(self.config.keys())}")
             raise
