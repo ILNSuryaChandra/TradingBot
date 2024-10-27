@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 from pybit.unified_trading import HTTP
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 
 # Configure logging
 logging.basicConfig(
@@ -115,7 +115,7 @@ class AsyncBybitClient:
             self.logger.info(f"Requesting wallet balance for {coin}")
             
             # Generate timestamp and signature
-            timestamp = str(int(time.time() * 1000))
+            timestamp = str(int(datetime.now().timestamp() * 1000))
             signature = self._get_signature(timestamp)
             
             # Set up headers
@@ -153,7 +153,7 @@ class AsyncBybitClient:
             await asyncio.sleep(self.rate_limit_margin)
             
             # Test public endpoint first
-            timestamp = str(int(time.time() * 1000))
+            timestamp = str(int(datetime.now().timestamp() * 1000))
             signature = self._get_signature(timestamp)
             
             headers = {
