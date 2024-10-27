@@ -78,12 +78,17 @@ class AsyncBybitClient:
         self.logger = logging.getLogger(__name__)
         
     async def get_balance(self, coin: str = "USDT") -> float:
+        """Get wallet balance"""
         try:
-            response = await self._make_request(
-                lambda: self.client.get_wallet_balance(accountType="UNIFIED", coin=coin)
+            await asyncio.sleep(self.rate_limit_margin)  # Rate limiting
+            response = self.client.get_wallet_balance(
+                accountType="UNIFIED",
+                coin=coin
             )
+            
             if response.get('retCode') == 0:
-                return float(response['result']['list'][0]['totalWalletBalance'])
+                wallet = response['result']['list'][0]
+                return float(wallet['totalWalletBalance'])
             raise Exception(f"Failed to get balance: {response.get('retMsg')}")
         except Exception as e:
             self.logger.error(f"Error fetching balance: {str(e)}")
@@ -263,6 +268,7 @@ class AsyncBybitClient:
             raise
 
     async def _make_request(self, request_func, max_retries: int = 3):
+        """Make API request with retry logic"""
         for attempt in range(max_retries):
             try:
                 await asyncio.sleep(self.rate_limit_margin)  # Rate limiting
