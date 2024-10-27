@@ -7,7 +7,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.cluster import DBSCAN
 import tensorflow as tf
-from tensorflow.keras.layers import LSTM, Dense, Dropout
+from keras.layers import LSTM, Dense, Dropout
 import xgboost as xgb
 from dataclasses import dataclass
 import logging

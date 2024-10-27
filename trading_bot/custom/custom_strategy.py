@@ -6,6 +6,7 @@ import pandas_ta as ta
 from abc import ABC, abstractmethod
 import logging
 from .indicators import CustomIndicator, IndicatorResult
+from .custom_indicators import CustomVolumeProfile, CustomMarketStructure, CustomMomentumIndex
 
 class BaseStrategy(ABC):
     def __init__(self, config: Dict[str, Any]):

@@ -8,3 +8,4 @@ from .advanced_indicators import OrderFlowAnalysis, MarketRegimeAnalysis
 from .pattern_analysis import AdvancedPatternRecognition
 from .ml_enhanced_indicators import MLEnhancedPriceAction, SmartMoneyAnalysis
 from .strategy_integration import AdvancedStrategyIntegration
+from .custom_indicators import CustomVolumeProfile, CustomMarketStructure, CustomMomentumIndex
