@@ -1,15 +1,19 @@
 # trading_bot/core/base.py
+import hashlib
+import hmac
 from typing import Dict, List, Optional, Union, Any
 from dataclasses import dataclass
 from enum import Enum
 import asyncio
 import logging
+import requests
+import urllib
 import yaml
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
 from pybit.unified_trading import HTTP
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 # Configure logging
 logging.basicConfig(
@@ -70,90 +74,110 @@ class AsyncBybitClient:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.logger = logging.getLogger(__name__)
+        self.api_key = config['api']['api_key']
+        self.api_secret = config['api']['api_secret']
+        self.base_url = config['api']['base_url']
+        self.rate_limit_margin = config['api']['rate_limit_margin']
         
         try:
             self.logger.info(f"Initializing Bybit client with testnet={config['api']['testnet']}")
             
-            # Initialize HTTP client with proper parameters
+            # Initialize HTTP client
             self.client = HTTP(
                 testnet=config['api']['testnet'],
-                api_key=config['api']['api_key'],
-                api_secret=config['api']['api_secret'],
-                recv_window=5000
+                api_key=self.api_key,
+                api_secret=self.api_secret
             )
-            self.rate_limit_margin = config['api']['rate_limit_margin']
             
-            # Log successful initialization
             self.logger.info("Bybit client initialized successfully")
             
         except Exception as e:
             self.logger.error(f"Error initializing Bybit client: {str(e)}")
             raise
+    
+    def _get_signature(self, timestamp: str, params: Dict[str, Any] = None) -> str:
+        """Generate signature for API request"""
+        params = params or {}
+        param_str = urllib.parse.urlencode(dict(sorted(params.items())))
+        
+        sign_str = timestamp + self.api_key + param_str
+        return hmac.new(
+            bytes(self.api_secret, "utf-8"),
+            sign_str.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
         
     async def get_balance(self, coin: str = "USDT") -> float:
-        """Get wallet balance using wallet account endpoint"""
+        """Get wallet balance using V3 API"""
         try:
             await asyncio.sleep(self.rate_limit_margin)
             
             self.logger.info(f"Requesting wallet balance for {coin}")
             
-            # Use get_wallet_balance instead of get_coins_balance
-            response = await self._make_request(
-                lambda: self.client.get_wallet_balance(
-                    accountType="UNIFIED",  # Changed from SPOT to UNIFIED
-                    coin=coin
-                )
-            )
+            # Generate timestamp and signature
+            timestamp = str(int(time.time() * 1000))
+            signature = self._get_signature(timestamp)
             
-            self.logger.debug(f"Balance response code: {response.get('retCode')}")
+            # Set up headers
+            headers = {
+                "X-BAPI-API-KEY": self.api_key,
+                "X-BAPI-TIMESTAMP": timestamp,
+                "X-BAPI-SIGN": signature,
+                "X-BAPI-RECV-WINDOW": "5000"
+            }
             
-            if response.get('retCode') == 0:
-                result = response.get('result', {})
-                list_data = result.get('list', [])
-                
-                if list_data:
-                    # Get the first wallet in the list
-                    wallet = list_data[0]
-                    total_balance = float(wallet.get('totalWalletBalance', '0'))
+            # Make API request
+            url = f"{self.base_url}/v3/private/wallet/balance"
+            response = requests.get(url, headers=headers)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data['ret_code'] == 0:
+                    balance_info = data['result'].get(coin, {})
+                    total_balance = float(balance_info.get('wallet_balance', '0'))
                     self.logger.info(f"Successfully retrieved balance: {total_balance} {coin}")
                     return total_balance
                 else:
-                    self.logger.warning(f"No wallet data found for {coin}")
-                    return 0.0
-                    
-            error_msg = response.get('retMsg', 'Unknown error')
-            self.logger.error(f"Failed to get balance: {error_msg}")
-            raise Exception(f"Failed to get balance: {error_msg}")
+                    self.logger.error(f"API error: {data.get('ret_msg')}")
+            
+            self.logger.error(f"Failed to get balance: Status {response.status_code}")
+            return 0.0
             
         except Exception as e:
-            error_msg = str(e)
-            if "10003" in error_msg:
-                self.logger.error("Invalid API key or insufficient permissions")
-                self.logger.info("Please ensure API key has 'Contract' permission enabled")
-            elif "401" in error_msg:
-                self.logger.error("Authentication failed. Please check API credentials")
-            else:
-                self.logger.error(f"Error fetching balance: {error_msg}")
-            raise
+            self.logger.error(f"Error fetching balance: {str(e)}")
+            return 0.0
 
     async def test_connection(self) -> bool:
         """Test API connection using server time endpoint"""
         try:
             await asyncio.sleep(self.rate_limit_margin)
             
-            # Use a public endpoint first to test basic connectivity
-            response = await self._make_request(
-                lambda: self.client.get_server_time()
-            )
+            # Test public endpoint first
+            timestamp = str(int(time.time() * 1000))
+            signature = self._get_signature(timestamp)
             
-            if response.get('retCode') == 0:
-                self.logger.info("Basic API connectivity test successful")
+            headers = {
+                "X-BAPI-API-KEY": self.api_key,
+                "X-BAPI-TIMESTAMP": timestamp,
+                "X-BAPI-SIGN": signature
+            }
+            
+            url = f"{self.base_url}/v3/public/time"
+            response = requests.get(url)
+            
+            if response.status_code != 200:
+                self.logger.error("Failed to connect to Bybit API")
+                return False
                 
-                # Now test authenticated endpoint
-                balance_response = await self.get_balance()
-                if balance_response >= 0:
-                    return True
-                    
+            self.logger.info("Basic API connectivity test successful")
+            
+            # Test authenticated endpoint
+            balance = await self.get_balance()
+            if balance >= 0:
+                self.logger.info("Authentication test successful")
+                return True
+                
+            self.logger.error("Authentication test failed")
             return False
             
         except Exception as e:
@@ -343,14 +367,14 @@ class AsyncBybitClient:
                 response = request_func()
                 
                 if isinstance(response, dict):
-                    ret_code = response.get('retCode')
-                    ret_msg = response.get('retMsg', 'No message')
-                    
+                    ret_code = response.get('ret_code')
                     if ret_code == 0:
                         return response
-                    elif ret_code == 10003:
-                        self.logger.error(f"API key error: {ret_msg}")
-                        raise Exception(f"API key error: {ret_msg}")
+                        
+                    error_msg = response.get('ret_msg', 'Unknown error')
+                    if ret_code in [10003, 10004]:  # API key errors
+                        self.logger.error(f"API key error: {error_msg}")
+                        raise Exception(f"API key error: {error_msg}")
                         
                 return response
                 
@@ -365,8 +389,6 @@ class AsyncBybitClient:
                     await asyncio.sleep(wait_time)
                 else:
                     break
-                    
-        raise last_error or Exception("Request failed after all retries")
                     
         raise last_error or Exception("Request failed after all retries")
 
